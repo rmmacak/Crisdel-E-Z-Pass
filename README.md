@@ -73,6 +73,54 @@ committed to the repo unless you explicitly `git add` them. Since a
 Codespace resets when deleted, don't rely on it for storing your monthly
 reports; download each finished Excel file before you close the session.
 
+## Deploying to Azure (public URL, always-on)
+
+Use **Azure App Service** (not Azure Static Web Apps -- that product only
+hosts static HTML/JS/CSS, and can't run a Python process like this app).
+App Service runs the dashboard continuously and gives you a real URL like
+`https://crisdel-toll-dashboard.azurewebsites.net` that anyone on your team
+can open.
+
+This repo already includes what Azure needs (`startup.sh` and
+`.streamlit/config.toml`).
+
+1. In the [Azure Portal](https://portal.azure.com), search **App Services**
+   -> **Create** -> **Web App**.
+2. Fill in:
+   - **Publish:** Code
+   - **Runtime stack:** Python 3.11
+   - **Operating System:** Linux
+   - **Region:** whichever is closest to you
+   - **Pricing plan:** Free (F1) or Basic (B1) is plenty for this
+3. Click **Review + create** -> **Create**. Wait for deployment to finish,
+   then click **Go to resource**.
+4. In the left menu, click **Deployment Center**.
+   - **Source:** GitHub
+   - Sign in and pick your repo and branch (`main`)
+   - Save -- Azure will build and deploy automatically, and redeploy every
+     time you push to GitHub from now on.
+5. In the left menu, click **Configuration** -> **General settings**:
+   - **Startup Command:** `bash startup.sh`
+   - Save.
+6. Still in **Configuration**, click **Application settings** -> **+ New
+   application setting**:
+   - Name: `WEBSITES_PORT`  Value: `8000`
+   - Save (this tells Azure which port the app is listening on).
+7. Give it a few minutes to redeploy after saving, then open the URL shown
+   at the top of the Overview page.
+
+**Worth knowing before you open this up to your team:**
+- This URL will be reachable by anyone who has it, with no login screen,
+  unless you add one. For toll/vehicle data, that's worth locking down:
+  in the App Service resource, **Authentication** -> **Add identity
+  provider** -> **Microsoft** lets you require an Azure AD (company
+  Microsoft 365) sign-in before anyone can reach the app -- a few clicks,
+  no code changes needed.
+- The saved equipment list (`.cache/last_equipment_list.xlsx`) persists on
+  App Service's disk between visits, but a fresh deployment (new git push)
+  can reset it depending on your plan -- if the sidebar ever shows "no
+  equipment list saved" unexpectedly, just re-upload it once.
+
 ## Running it locally via terminal (alternative to the launcher)
 
 You'll need **Python 3.9+** installed. Then, from this folder:
