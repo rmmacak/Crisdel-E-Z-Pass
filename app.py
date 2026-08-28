@@ -13,6 +13,7 @@ equipment/transponder mapping spreadsheet (only needs re-uploading when the
 fleet list changes -- the app remembers the last one you gave it), and
 click Generate to get the combined, cross-referenced Excel report.
 """
+import base64
 import io
 import os
 import tempfile
@@ -24,11 +25,119 @@ import crisdel_toll_report as ctr
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 CACHED_MAPPING_PATH = os.path.join(CACHE_DIR, "last_equipment_list.xlsx")
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "crisdel_logo.png")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-st.set_page_config(page_title="Crisdel Toll Reconciliation", layout="centered")
+# Crisdel brand colors, pulled from the company logo
+NAVY = "#163581"
+LIGHT_BLUE = "#C1E1F3"
+PAGE_TINT = "#F5F9FC"
 
-st.title("Crisdel Toll Reconciliation Dashboard")
+st.set_page_config(
+    page_title="Crisdel Toll Reconciliation",
+    page_icon=LOGO_PATH if os.path.exists(LOGO_PATH) else None,
+    layout="centered",
+)
+
+st.markdown(f"""
+<style>
+    .stApp {{ background-color: #FFFFFF; }}
+
+    h1, h2, h3, h4 {{ font-family: 'Times New Roman', Times, serif; color: {NAVY}; }}
+
+    .crisdel-banner {{
+        background-color: {NAVY};
+        border-radius: 10px;
+        padding: 1.1rem 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1.25rem;
+    }}
+    .crisdel-banner img {{ height: 54px; border-radius: 4px; }}
+    .crisdel-banner .crisdel-title {{
+        font-family: 'Times New Roman', Times, serif;
+        color: #FFFFFF;
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin: 0;
+        line-height: 1.2;
+    }}
+    .crisdel-banner .crisdel-subtitle {{
+        color: {LIGHT_BLUE};
+        font-size: 0.85rem;
+        margin: 0.15rem 0 0 0;
+    }}
+
+    div.stButton > button, div.stDownloadButton > button {{
+        background-color: {NAVY};
+        color: #FFFFFF;
+        border: 1px solid {NAVY};
+        border-radius: 6px;
+        font-weight: 600;
+    }}
+    div.stButton > button:hover, div.stDownloadButton > button:hover {{
+        background-color: {LIGHT_BLUE};
+        color: {NAVY};
+        border: 1px solid {NAVY};
+    }}
+    div.stButton > button:disabled {{
+        background-color: #B9C4D9;
+        color: #F0F0F0;
+        border: none;
+    }}
+
+    [data-testid="stMetric"] {{
+        background-color: {LIGHT_BLUE};
+        border: 1px solid {NAVY};
+        border-radius: 8px;
+        padding: 0.85rem 0.75rem;
+    }}
+    [data-testid="stMetricValue"] {{ color: {NAVY}; font-family: 'Times New Roman', Times, serif; }}
+    [data-testid="stMetricLabel"] {{ color: {NAVY}; }}
+
+    [data-testid="stFileUploaderDropzone"] {{
+        border: 2px dashed {NAVY};
+        background-color: {PAGE_TINT};
+        border-radius: 8px;
+    }}
+
+    section[data-testid="stSidebar"] {{
+        background-color: {PAGE_TINT};
+        border-right: 2px solid {NAVY};
+    }}
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] label {{
+        color: {NAVY};
+    }}
+
+    div[data-testid="stExpander"] summary {{ color: {NAVY}; font-weight: 600; }}
+</style>
+""", unsafe_allow_html=True)
+
+
+def _logo_b64():
+    if not os.path.exists(LOGO_PATH):
+        return None
+    with open(LOGO_PATH, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+
+_logo_data = _logo_b64()
+_logo_html = f'<img src="data:image/png;base64,{_logo_data}"/>' if _logo_data else ""
+
+st.markdown(f"""
+<div class="crisdel-banner">
+    {_logo_html}
+    <div>
+        <p class="crisdel-title">Crisdel Toll Reconciliation Dashboard</p>
+        <p class="crisdel-subtitle">E-ZPass + SunPass, cross-referenced to the Crisdel fleet</p>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 st.caption(
     "Upload this month's E-ZPass and SunPass transaction PDFs. "
     "Upload the equipment/transponder mapping spreadsheet too -- only "
@@ -36,7 +145,7 @@ st.caption(
 )
 
 with st.sidebar:
-    st.header("Fraud flag threshold")
+    st.markdown("### Fraud flag threshold")
     threshold = st.number_input(
         "Flag transactions over ($)", min_value=0.0, value=10.0, step=1.0,
         help="Any toll transaction above this amount is flagged for review."
@@ -106,6 +215,7 @@ if generate:
     status.empty()
     st.success("Report generated.")
 
+    st.markdown("#### Summary")
     toll_df = df[df['Transaction Type'] == 'Toll']
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Toll transactions", f"{len(toll_df):,}")

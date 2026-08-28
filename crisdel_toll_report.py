@@ -10,6 +10,7 @@ Excel workbook.
 This module has no Streamlit dependency, so it can also be run standalone
 from the command line or imported into other scripts / a notebook.
 """
+import os
 import re
 from datetime import datetime
 
@@ -18,14 +19,22 @@ import pdfplumber
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.drawing.image import Image as XLImage
 
-FONT = "Arial"
+DEFAULT_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'crisdel_logo.png')
+
+FONT = "Times New Roman"
 FRAUD_THRESHOLD = 10.00
+
+# Crisdel brand colors (pulled from the company logo)
+BRAND_NAVY = "163581"
+BRAND_LIGHT_BLUE = "C1E1F3"
+BRAND_NAVY_TEXT = "0F2560"  # slightly darker navy, for readable body text/titles
 
 COLUMNS = [
     ('Source', 12),
     ('Transaction Type', 16),
-    ('Posted Date', 12),
     ('Transaction Date', 14),
     ('Transaction Time', 12),
     ('Transponder/Plate (raw)', 20),
@@ -307,18 +316,36 @@ def build_combined_dataframe(ezpass_pdf_path, sunpass_pdf_path, mapping_xlsx_pat
 # ---------------------------------------------------------------------------
 # 5. Excel report builder
 # ---------------------------------------------------------------------------
-header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+header_fill = PatternFill(start_color=BRAND_NAVY, end_color=BRAND_NAVY, fill_type="solid")
 header_font = Font(name=FONT, size=10, bold=True, color="FFFFFF")
-title_font = Font(name=FONT, size=14, bold=True, color="1F4E78")
+title_font = Font(name=FONT, size=14, bold=True, color=BRAND_NAVY_TEXT)
 subtitle_font = Font(name=FONT, size=9, italic=True, color="595959")
 fraud_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
 fraud_font = Font(name=FONT, size=10, color="9C0006")
 unmatched_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
 payment_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+accent_fill = PatternFill(start_color=BRAND_LIGHT_BLUE, end_color=BRAND_LIGHT_BLUE, fill_type="solid")
 thin = Side(style="thin", color="D9D9D9")
 border = Border(left=thin, right=thin, top=thin, bottom=thin)
 body_font = Font(name=FONT, size=10)
 center = Alignment(horizontal="center", vertical="center")
+
+
+def _add_table(ws, name, header_row, last_data_row, first_col, last_col):
+    """Turn a header+data range into a real Excel Table (filter/sort dropdowns).
+    Skips gracefully if there are zero data rows, since Excel tables need at
+    least one data row below the header."""
+    if last_data_row < header_row + 1:
+        return
+    ref = f"{get_column_letter(first_col)}{header_row}:{get_column_letter(last_col)}{last_data_row}"
+    table = Table(displayName=name, ref=ref)
+    # Row banding/highlighting is handled manually (fraud/unmatched/payment
+    # fills), so keep the built-in table style plain to avoid clashing.
+    table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium9", showFirstColumn=False, showLastColumn=False,
+        showRowStripes=False, showColumnStripes=False,
+    )
+    ws.add_table(table)
 
 
 def _write_title(ws, title, subtitle, ncols, start_row=1):
@@ -368,7 +395,7 @@ def _write_table(ws, data_df, header_row, columns, highlight_fraud=True, highlig
     return r
 
 
-def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None):
+def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None, logo_path=DEFAULT_LOGO_PATH):
     wb = openpyxl.Workbook()
 
     # ---- All Transactions ----
@@ -384,6 +411,7 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None):
     next_row = _write_table(ws1, df, hdr_row, COLUMNS)
     last_data_row = next_row - 1
     data_first, data_last = hdr_row + 1, last_data_row
+    _add_table(ws1, "AllTransactionsTable", hdr_row, last_data_row, 1, len(COLUMNS))
 
     # ---- Flagged - Over $X ----
     ws2 = wb.create_sheet(f"Flagged - Over ${fraud_threshold:.0f}")
@@ -394,7 +422,8 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None):
         f"{len(fraud_df)} transactions  |  Generated {datetime.now().strftime('%m/%d/%Y')}",
         len(COLUMNS),
     )
-    _write_table(ws2, fraud_df, hdr_row2, COLUMNS, highlight_fraud=True, highlight_unmatched=False)
+    fraud_next_row = _write_table(ws2, fraud_df, hdr_row2, COLUMNS, highlight_fraud=True, highlight_unmatched=False)
+    _add_table(ws2, "FlaggedTable", hdr_row2, fraud_next_row - 1, 1, len(COLUMNS))
 
     # ---- Unmatched ----
     ws3 = wb.create_sheet("Unmatched Plates-Transponders")
@@ -406,13 +435,17 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None):
         f"Generated {datetime.now().strftime('%m/%d/%Y')}",
         len(COLUMNS),
     )
-    _write_table(ws3, unmatched_df, hdr_row3, COLUMNS, highlight_fraud=False, highlight_unmatched=True)
+    unmatched_next_row = _write_table(ws3, unmatched_df, hdr_row3, COLUMNS, highlight_fraud=False, highlight_unmatched=True)
+    _add_table(ws3, "UnmatchedTable", hdr_row3, unmatched_next_row - 1, 1, len(COLUMNS))
 
     # ---- Summary by Truck (formula-driven) ----
     trucks = sorted(df['Truck #'].dropna().unique().tolist())
     ws4 = wb.create_sheet("Summary by Truck", 1)
     SHEET = "'All Transactions'"
-    COL = {'Truck #': 'G', 'License Plate': 'H', 'Assigned Driver': 'I', 'Amount': 'L'}
+    # Column letters in "All Transactions" after removing the Posted Date column:
+    # A=Source B=Transaction Type C=Transaction Date D=Transaction Time
+    # E=Transponder F=Truck# G=License Plate H=Assigned Driver I=Agency J=Location K=Amount L=Match Status
+    COL = {'Truck #': 'F', 'License Plate': 'G', 'Assigned Driver': 'H', 'Amount': 'K'}
 
     ws4.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
     ws4.cell(row=1, column=1, value="Crisdel Toll Reconciliation \u2014 Summary by Truck").font = title_font
@@ -456,6 +489,8 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None):
                 cell.alignment = Alignment(horizontal="left", vertical="center")
         r += 1
 
+    _add_table(ws4, "SummaryByTruckTable", hdr_row_s, r - 1, 1, len(cols4))
+
     total_row = r
     ws4.cell(row=total_row, column=1, value="TOTAL").font = Font(name=FONT, size=10, bold=True)
     ws4.cell(row=total_row, column=4, value=f'=SUM(D{hdr_row_s+1}:D{total_row-1})').font = Font(name=FONT, size=10, bold=True)
@@ -470,12 +505,21 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None):
     # ---- README ----
     cover = wb.create_sheet("README", 0)
     cover.sheet_view.showGridLines = False
-    cover.merge_cells("A1:F1")
-    cover["A1"] = "Crisdel Toll Reconciliation Report"
-    cover["A1"].font = Font(name=FONT, size=16, bold=True, color="1F4E78")
-    cover.merge_cells("A2:F2")
-    cover["A2"] = "E-ZPass + SunPass, monthly, cross-referenced to Crisdel fleet"
-    cover["A2"].font = subtitle_font
+
+    title_row = 1
+    if logo_path and os.path.exists(logo_path):
+        logo_img = XLImage(logo_path)
+        logo_img.width = 100
+        logo_img.height = 69
+        cover.add_image(logo_img, 'A1')
+        title_row = 6  # clear of the logo, which spans roughly rows 1-4 at this size
+
+    cover.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=6)
+    cover.cell(row=title_row, column=1, value="Crisdel Toll Reconciliation Report").font = \
+        Font(name=FONT, size=16, bold=True, color=BRAND_NAVY_TEXT)
+    cover.merge_cells(start_row=title_row + 1, start_column=1, end_row=title_row + 1, end_column=6)
+    cover.cell(row=title_row + 1, column=1,
+               value="E-ZPass + SunPass, monthly, cross-referenced to Crisdel fleet").font = subtitle_font
 
     toll_df = df[df['Transaction Type'] == 'Toll']
     lines = [
@@ -497,22 +541,22 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None):
         ("  Unmatched", f"{(toll_df['Match Status']=='UNMATCHED').sum():,}"),
         (f"  Flagged (over ${fraud_threshold:.0f})", f"{toll_df['Fraud Flag'].sum():,}"),
     ]
-    r = 4
+    r = title_row + 3
     for label, val in lines:
         is_header = val == "" and label and not label.startswith(" ")
         cover.cell(row=r, column=1, value=label).font = (
-            Font(name=FONT, size=11, bold=True, color="1F4E78") if is_header else body_font)
+            Font(name=FONT, size=11, bold=True, color=BRAND_NAVY_TEXT) if is_header else body_font)
         vc = cover.cell(row=r, column=2, value=val)
         vc.font = Font(name=FONT, size=10, bold=True) if not is_header and val else body_font
         r += 1
     cover.column_dimensions['A'].width = 32
     cover.column_dimensions['B'].width = 65
 
-    wb['All Transactions'].sheet_properties.tabColor = "1F4E78"
-    wb['Summary by Truck'].sheet_properties.tabColor = "2E7D32"
+    wb['All Transactions'].sheet_properties.tabColor = BRAND_NAVY
+    wb['Summary by Truck'].sheet_properties.tabColor = BRAND_LIGHT_BLUE
     wb[f"Flagged - Over ${fraud_threshold:.0f}"].sheet_properties.tabColor = "C00000"
     wb['Unmatched Plates-Transponders'].sheet_properties.tabColor = "BF8F00"
-    wb['README'].sheet_properties.tabColor = "808080"
+    wb['README'].sheet_properties.tabColor = BRAND_NAVY
 
     if output_path:
         wb.save(output_path)
