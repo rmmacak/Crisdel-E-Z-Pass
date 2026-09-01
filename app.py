@@ -160,113 +160,80 @@ with st.sidebar:
     else:
         st.warning("No equipment list saved yet -- upload one below.")
 
-tab_generate, tab_history = st.tabs(["Generate Report", "Report History"])
+col1, col2 = st.columns(2)
+with col1:
+    ezpass_file = st.file_uploader("E-ZPass transaction PDF", type=["pdf"], key="ezpass")
+with col2:
+    sunpass_file = st.file_uploader("SunPass transaction PDF", type=["pdf"], key="sunpass")
 
-with tab_generate:
-    col1, col2 = st.columns(2)
-    with col1:
-        ezpass_file = st.file_uploader("E-ZPass transaction PDF", type=["pdf"], key="ezpass")
-    with col2:
-        sunpass_file = st.file_uploader("SunPass transaction PDF", type=["pdf"], key="sunpass")
+equipment_file = st.file_uploader(
+    "Crisdel equipment / transponder mapping (.xlsx) -- optional if you've uploaded it before",
+    type=["xlsx"], key="equipment",
+)
 
-    equipment_file = st.file_uploader(
-        "Crisdel equipment / transponder mapping (.xlsx) -- optional if you've uploaded it before",
-        type=["xlsx"], key="equipment",
+generate = st.button("Generate Report", type="primary", use_container_width=True,
+                      disabled=not (ezpass_file and sunpass_file))
+
+if generate:
+    # Resolve which mapping file to use
+    if equipment_file is not None:
+        with open(CACHED_MAPPING_PATH, "wb") as f:
+            f.write(equipment_file.getbuffer())
+        mapping_path = CACHED_MAPPING_PATH
+    elif os.path.exists(CACHED_MAPPING_PATH):
+        mapping_path = CACHED_MAPPING_PATH
+    else:
+        st.error("No equipment/transponder mapping file available. Please upload one.")
+        st.stop()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ez_path = os.path.join(tmp, "ezpass.pdf")
+        sp_path = os.path.join(tmp, "sunpass.pdf")
+        with open(ez_path, "wb") as f:
+            f.write(ezpass_file.getbuffer())
+        with open(sp_path, "wb") as f:
+            f.write(sunpass_file.getbuffer())
+
+        status = st.empty()
+        progress_lines = []
+
+        def log(msg):
+            progress_lines.append(msg)
+            status.info("\n\n".join(progress_lines[-4:]))
+
+        with st.spinner("Processing..."):
+            df = ctr.build_combined_dataframe(
+                ez_path, sp_path, mapping_path,
+                fraud_threshold=threshold, progress_cb=log,
+            )
+            wb = ctr.build_workbook(df, fraud_threshold=threshold)
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+    status.empty()
+    st.success("Report generated.")
+
+    st.markdown("#### Summary")
+    toll_df = df[df['Transaction Type'] == 'Toll']
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Toll transactions", f"{len(toll_df):,}")
+    m2.metric("Total spend", f"${toll_df['Amount'].sum():,.2f}")
+    m3.metric("Unmatched", f"{(toll_df['Match Status']=='UNMATCHED').sum():,}")
+    m4.metric(f"Flagged (>${threshold:.0f})", f"{toll_df['Fraud Flag'].sum():,}")
+
+    fname = f"Crisdel Toll Reconciliation Report - {datetime.now().strftime('%b %Y')}.xlsx"
+    st.download_button(
+        "Download Excel Report", data=buf, file_name=fname,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
     )
 
-    generate = st.button("Generate Report", type="primary", use_container_width=True,
-                          disabled=not (ezpass_file and sunpass_file))
-
-    if generate:
-        # Resolve which mapping file to use
-        if equipment_file is not None:
-            with open(CACHED_MAPPING_PATH, "wb") as f:
-                f.write(equipment_file.getbuffer())
-            mapping_path = CACHED_MAPPING_PATH
-        elif os.path.exists(CACHED_MAPPING_PATH):
-            mapping_path = CACHED_MAPPING_PATH
-        else:
-            st.error("No equipment/transponder mapping file available. Please upload one.")
-            st.stop()
-
-        with tempfile.TemporaryDirectory() as tmp:
-            ez_path = os.path.join(tmp, "ezpass.pdf")
-            sp_path = os.path.join(tmp, "sunpass.pdf")
-            with open(ez_path, "wb") as f:
-                f.write(ezpass_file.getbuffer())
-            with open(sp_path, "wb") as f:
-                f.write(sunpass_file.getbuffer())
-
-            status = st.empty()
-            progress_lines = []
-
-            def log(msg):
-                progress_lines.append(msg)
-                status.info("\n\n".join(progress_lines[-4:]))
-
-            with st.spinner("Processing..."):
-                df = ctr.build_combined_dataframe(
-                    ez_path, sp_path, mapping_path,
-                    fraud_threshold=threshold, progress_cb=log,
-                )
-                wb = ctr.build_workbook(df, fraud_threshold=threshold)
-                ctr.save_report_to_archive(wb, df, fraud_threshold=threshold)
-
-            buf = io.BytesIO()
-            wb.save(buf)
-            buf.seek(0)
-
-        status.empty()
-        st.success("Report generated and saved to Report History.")
-
-        st.markdown("#### Summary")
-        toll_df = df[df['Transaction Type'] == 'Toll']
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Toll transactions", f"{len(toll_df):,}")
-        m2.metric("Total spend", f"${toll_df['Amount'].sum():,.2f}")
-        m3.metric("Unmatched", f"{(toll_df['Match Status']=='UNMATCHED').sum():,}")
-        m4.metric(f"Flagged (>${threshold:.0f})", f"{toll_df['Fraud Flag'].sum():,}")
-
-        fname = f"Crisdel Toll Reconciliation Report - {datetime.now().strftime('%b %Y')}.xlsx"
-        st.download_button(
-            "Download Excel Report", data=buf, file_name=fname,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    with st.expander("Preview: unmatched transponders/plates"):
+        st.dataframe(
+            df[df['Match Status'] == 'UNMATCHED'][
+                ['Source', 'Transaction Date', 'Transponder/Plate (raw)', 'Agency', 'Amount']
+            ],
             use_container_width=True,
         )
-
-        with st.expander("Preview: unmatched transponders/plates"):
-            st.dataframe(
-                df[df['Match Status'] == 'UNMATCHED'][
-                    ['Source', 'Transaction Date', 'Transponder/Plate (raw)', 'Agency', 'Amount']
-                ],
-                use_container_width=True,
-            )
-
-with tab_history:
-    reports = ctr.list_archived_reports()
-    if not reports:
-        st.info("No reports generated yet. Once you generate one on the other tab, it'll show up here.")
-    else:
-        st.caption(f"{len(reports)} report(s) on file, newest first.")
-        for entry in reports:
-            with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.markdown(f"**{entry['label']}**")
-                    st.caption(
-                        f"{entry['toll_transactions']:,} transactions  |  "
-                        f"${entry['total_spend']:,.2f} total  |  "
-                        f"{entry['unmatched']:,} unmatched  |  "
-                        f"{entry['flagged']:,} flagged (>${entry.get('fraud_threshold', 10):.0f})"
-                    )
-                with c2:
-                    fpath = ctr.get_archived_report_path(entry['filename'])
-                    if fpath:
-                        with open(fpath, "rb") as f:
-                            st.download_button(
-                                "Download", data=f.read(), file_name=entry['filename'],
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"dl_{entry['filename']}", use_container_width=True,
-                            )
-                    else:
-                        st.caption("File no longer available")

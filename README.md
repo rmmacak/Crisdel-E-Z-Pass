@@ -134,19 +134,6 @@ Streamlit will print a local URL (usually `http://localhost:8501`) --
 open that in your browser. The app runs entirely on your own machine;
 nothing is uploaded anywhere else.
 
-## Report History
-
-Every report you generate is automatically saved and shows up in the
-**Report History** tab, so you (or your team) can go back and download
-any past month's report without needing to have kept the original
-download. Each entry shows the transaction count, total spend, unmatched
-count, and flagged count at a glance, with its own Download button.
-
-This is stored on the app's own disk under `data/reports_archive/`, alongside
-a small `index.json` file with the summary stats -- it isn't a separate
-Azure resource, so there's nothing extra to set up. On Azure App Service,
-this persists across restarts the same way the cached equipment list does.
-
 ## Editing the generated Excel
 
 The output is a completely normal `.xlsx` file -- open it in Excel and

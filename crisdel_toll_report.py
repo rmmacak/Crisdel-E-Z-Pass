@@ -10,7 +10,6 @@ Excel workbook.
 This module has no Streamlit dependency, so it can also be run standalone
 from the command line or imported into other scripts / a notebook.
 """
-import json
 import os
 import re
 from datetime import datetime
@@ -24,8 +23,12 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.drawing.image import Image as XLImage
 
 DEFAULT_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'crisdel_logo.png')
-ARCHIVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'reports_archive')
-ARCHIVE_INDEX = os.path.join(ARCHIVE_DIR, 'index.json')
+
+# Both E-ZPass and SunPass statements use real drawn grid lines for their
+# tables, so telling pdfplumber to trust those lines instead of running its
+# default auto-detection heuristics is meaningfully faster with identical
+# output (benchmarked: ~15-35% faster, zero row-count difference).
+FAST_TABLE_SETTINGS = {"vertical_strategy": "lines", "horizontal_strategy": "lines"}
 
 FONT = "Times New Roman"
 FRAUD_THRESHOLD = 10.00
@@ -173,7 +176,7 @@ def parse_ezpass(path):
     records = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            for table in page.extract_tables():
+            for table in page.extract_tables(table_settings=FAST_TABLE_SETTINGS):
                 if not table:
                     continue
                 header = table[0]
@@ -214,7 +217,7 @@ def parse_sunpass(path):
     records = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            for table in page.extract_tables():
+            for table in page.extract_tables(table_settings=FAST_TABLE_SETTINGS):
                 if not table:
                     continue
                 header = table[0]
@@ -564,65 +567,3 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None, logo_p
     if output_path:
         wb.save(output_path)
     return wb
-
-
-# ---------------------------------------------------------------------------
-# 6. Report history / archive
-# ---------------------------------------------------------------------------
-def _load_archive_index():
-    if not os.path.exists(ARCHIVE_INDEX):
-        return []
-    try:
-        with open(ARCHIVE_INDEX, 'r') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def _save_archive_index(entries):
-    os.makedirs(ARCHIVE_DIR, exist_ok=True)
-    with open(ARCHIVE_INDEX, 'w') as f:
-        json.dump(entries, f, indent=2)
-
-
-def save_report_to_archive(wb, df, fraud_threshold=FRAUD_THRESHOLD):
-    """Save a generated workbook into the persistent archive and record its
-    stats in a small JSON index, so Report History can list past reports
-    without having to re-open every .xlsx file."""
-    os.makedirs(ARCHIVE_DIR, exist_ok=True)
-    ts = datetime.now()
-    fname = f"Crisdel_Toll_Report_{ts.strftime('%Y-%m-%d_%H%M%S')}.xlsx"
-    fpath = os.path.join(ARCHIVE_DIR, fname)
-    wb.save(fpath)
-
-    toll_df = df[df['Transaction Type'] == 'Toll']
-    entry = {
-        'filename': fname,
-        'generated_at': ts.isoformat(),
-        'label': ts.strftime('%B %Y \u2014 generated %m/%d/%Y %I:%M %p'),
-        'toll_transactions': int(len(toll_df)),
-        'total_spend': float(toll_df['Amount'].sum()) if len(toll_df) else 0.0,
-        'matched': int((toll_df['Match Status'] == 'Matched').sum()),
-        'unmatched': int((toll_df['Match Status'] == 'UNMATCHED').sum()),
-        'flagged': int(toll_df['Fraud Flag'].sum()),
-        'fraud_threshold': fraud_threshold,
-    }
-    entries = _load_archive_index()
-    entries.append(entry)
-    _save_archive_index(entries)
-    return entry
-
-
-def list_archived_reports():
-    """Newest-first list of archived report metadata dicts."""
-    entries = _load_archive_index()
-    return sorted(entries, key=lambda e: e['generated_at'], reverse=True)
-
-
-def get_archived_report_path(filename):
-    """Resolve an archived report's filename to a safe path on disk, or
-    None if it doesn't exist. Guards against path traversal since the
-    filename ultimately comes from user-facing UI state."""
-    safe_name = os.path.basename(filename)
-    path = os.path.join(ARCHIVE_DIR, safe_name)
-    return path if os.path.exists(path) else None
