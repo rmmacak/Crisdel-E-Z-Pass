@@ -27,12 +27,6 @@ DEFAULT_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'as
 ARCHIVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'reports_archive')
 ARCHIVE_INDEX = os.path.join(ARCHIVE_DIR, 'index.json')
 
-# Both E-ZPass and SunPass statements use real drawn grid lines for their
-# tables, so telling pdfplumber to trust those lines instead of running its
-# default auto-detection heuristics is meaningfully faster with identical
-# output (benchmarked: ~15-35% faster, zero row-count difference).
-FAST_TABLE_SETTINGS = {"vertical_strategy": "lines", "horizontal_strategy": "lines"}
-
 FONT = "Times New Roman"
 FRAUD_THRESHOLD = 10.00
 
@@ -179,7 +173,7 @@ def parse_ezpass(path):
     records = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            for table in page.extract_tables(table_settings=FAST_TABLE_SETTINGS):
+            for table in page.extract_tables():
                 if not table:
                     continue
                 header = table[0]
@@ -220,7 +214,7 @@ def parse_sunpass(path):
     records = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            for table in page.extract_tables(table_settings=FAST_TABLE_SETTINGS):
+            for table in page.extract_tables():
                 if not table:
                     continue
                 header = table[0]
