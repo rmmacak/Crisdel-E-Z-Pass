@@ -335,6 +335,8 @@ thin = Side(style="thin", color="D9D9D9")
 border = Border(left=thin, right=thin, top=thin, bottom=thin)
 body_font = Font(name=FONT, size=10)
 center = Alignment(horizontal="center", vertical="center")
+left_align = Alignment(horizontal="left", vertical="center")
+right_align = Alignment(horizontal="right")
 
 
 def _add_table(ws, name, header_row, last_data_row, first_col, last_col):
@@ -387,9 +389,9 @@ def _write_table(ws, data_df, header_row, columns, highlight_fraud=True, highlig
             c.border = border
             if name == 'Amount':
                 c.number_format = '$#,##0.00'
-                c.alignment = Alignment(horizontal="right")
+                c.alignment = right_align
             else:
-                c.alignment = Alignment(horizontal="left", vertical="center")
+                c.alignment = left_align
             if is_fraud:
                 c.fill = fraud_fill
             elif is_unmatched:
@@ -490,9 +492,9 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None, logo_p
             cell.font, cell.border = body_font, border
             if col_idx == 5:
                 cell.number_format = '$#,##0.00'
-                cell.alignment = Alignment(horizontal="right")
+                cell.alignment = right_align
             else:
-                cell.alignment = Alignment(horizontal="left", vertical="center")
+                cell.alignment = left_align
         r += 1
 
     _add_table(ws4, "SummaryByTruckTable", hdr_row_s, r - 1, 1, len(cols4))
