@@ -10,6 +10,7 @@ Excel workbook.
 This module has no Streamlit dependency, so it can also be run standalone
 from the command line or imported into other scripts / a notebook.
 """
+import json
 import os
 import re
 from datetime import datetime
@@ -23,6 +24,8 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.drawing.image import Image as XLImage
 
 DEFAULT_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'crisdel_logo.png')
+ARCHIVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'reports_archive')
+ARCHIVE_INDEX = os.path.join(ARCHIVE_DIR, 'index.json')
 
 # Both E-ZPass and SunPass statements use real drawn grid lines for their
 # tables. PyMuPDF's table finder is a compiled-C implementation, which is
@@ -534,8 +537,10 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None, logo_p
     cover.cell(row=title_row, column=1, value="Crisdel Toll Reconciliation Report").font = \
         Font(name=FONT, size=16, bold=True, color=BRAND_NAVY_TEXT)
     cover.merge_cells(start_row=title_row + 1, start_column=1, end_row=title_row + 1, end_column=6)
+    _start_date, _end_date = get_transaction_date_range(df)
+    _period_label = format_period_label(_start_date, _end_date)
     cover.cell(row=title_row + 1, column=1,
-               value="E-ZPass + SunPass, monthly, cross-referenced to Crisdel fleet").font = subtitle_font
+               value=f"E-ZPass + SunPass, cross-referenced to Crisdel fleet  \u2014  {_period_label}").font = subtitle_font
 
     toll_df = df[df['Transaction Type'] == 'Toll']
     lines = [
@@ -577,3 +582,128 @@ def build_workbook(df, fraud_threshold=FRAUD_THRESHOLD, output_path=None, logo_p
     if output_path:
         wb.save(output_path)
     return wb
+
+
+# ---------------------------------------------------------------------------
+# 6. Report history / archive
+# ---------------------------------------------------------------------------
+def get_transaction_date_range(df):
+    """Return (start_date, end_date) as datetime.date objects covering the
+    actual toll transactions in df, or (None, None) if no valid dates."""
+    toll_df = df[df['Transaction Type'] == 'Toll']
+    dates = toll_df['_txn_date_parsed'].dropna()
+    if dates.empty:
+        return None, None
+    return dates.min().date(), dates.max().date()
+
+
+def format_period_label(start_date, end_date):
+    """Human-friendly date-range label, e.g. 'Aug 1 - Aug 27, 2026' or
+    'Aug 1, 2026' if it's a single day. Falls back to 'Unknown period'.
+    Builds day numbers manually (rather than platform-specific strftime
+    flags like %-d/%#d) so this works identically on Linux (Azure) and
+    Windows (the desktop launcher)."""
+    if not start_date or not end_date:
+        return "Unknown period"
+
+    def month_day(d):
+        return f"{d.strftime('%b')} {d.day}"
+
+    if start_date == end_date:
+        return f"{month_day(start_date)}, {start_date.year}"
+
+    same_year = start_date.year == end_date.year
+    same_month = same_year and start_date.month == end_date.month
+
+    if same_month:
+        return f"{month_day(start_date)} - {end_date.day}, {end_date.year}"
+    elif same_year:
+        return f"{month_day(start_date)} - {month_day(end_date)}, {end_date.year}"
+    else:
+        return f"{month_day(start_date)}, {start_date.year} - {month_day(end_date)}, {end_date.year}"
+
+
+def _safe_filename_fragment(label):
+    """Turn a date-range label into something safe for a filename."""
+    return re.sub(r'[^A-Za-z0-9 ,\-]', '', label).strip()
+
+
+def _load_archive_index():
+    if not os.path.exists(ARCHIVE_INDEX):
+        return []
+    try:
+        with open(ARCHIVE_INDEX, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_archive_index(entries):
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
+    with open(ARCHIVE_INDEX, 'w') as f:
+        json.dump(entries, f, indent=2)
+
+
+def save_report_to_archive(workbook_bytes, df, fraud_threshold=FRAUD_THRESHOLD):
+    """Save already-serialized workbook bytes into the persistent archive
+    and record stats in a small JSON index. Takes raw bytes (not a Workbook
+    object) so the caller can serialize once and reuse those same bytes for
+    both the archive copy and the download button.
+
+    The saved filename and label are based on the actual date range of the
+    transactions in the report (e.g. "Aug 1 - Aug 27, 2026"), not on when
+    the report happened to be generated.
+    """
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
+    start_date, end_date = get_transaction_date_range(df)
+    period_label = format_period_label(start_date, end_date)
+    ts = datetime.now()
+
+    if start_date and end_date:
+        date_fragment = f"{start_date.strftime('%Y-%m-%d')}_to_{end_date.strftime('%Y-%m-%d')}"
+    else:
+        date_fragment = ts.strftime('%Y-%m-%d_%H%M%S')
+    fname = f"Crisdel Toll Report {date_fragment}.xlsx"
+    fpath = os.path.join(ARCHIVE_DIR, fname)
+    with open(fpath, 'wb') as f:
+        f.write(workbook_bytes)
+
+    toll_df = df[df['Transaction Type'] == 'Toll']
+    entry = {
+        'filename': fname,
+        'generated_at': ts.isoformat(),
+        'period_label': period_label,
+        'start_date': start_date.isoformat() if start_date else None,
+        'end_date': end_date.isoformat() if end_date else None,
+        'label': f"{period_label}  (generated {ts.strftime('%m/%d/%Y %I:%M %p')})",
+        'toll_transactions': int(len(toll_df)),
+        'total_spend': float(toll_df['Amount'].sum()) if len(toll_df) else 0.0,
+        'matched': int((toll_df['Match Status'] == 'Matched').sum()),
+        'unmatched': int((toll_df['Match Status'] == 'UNMATCHED').sum()),
+        'flagged': int(toll_df['Fraud Flag'].sum()),
+        'fraud_threshold': fraud_threshold,
+    }
+    entries = _load_archive_index()
+    entries.append(entry)
+    _save_archive_index(entries)
+    return entry
+
+
+def list_archived_reports():
+    """Newest-first list of archived report metadata dicts (sorted by the
+    actual transaction start date, falling back to generated_at)."""
+    entries = _load_archive_index()
+    return sorted(
+        entries,
+        key=lambda e: e.get('start_date') or e['generated_at'],
+        reverse=True,
+    )
+
+
+def get_archived_report_path(filename):
+    """Resolve an archived report's filename to a safe path on disk, or
+    None if it doesn't exist. Guards against path traversal since the
+    filename ultimately comes from user-facing UI state."""
+    safe_name = os.path.basename(filename)
+    path = os.path.join(ARCHIVE_DIR, safe_name)
+    return path if os.path.exists(path) else None
