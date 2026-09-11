@@ -250,7 +250,7 @@ with tab_history:
         st.info("No reports generated yet. Once you generate one on the other tab, it'll show up here.")
     else:
         st.caption(f"{len(reports)} report(s) on file, most recent period first.")
-        for entry in reports:
+        for i, entry in enumerate(reports):
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
                 with c1:
@@ -269,7 +269,10 @@ with tab_history:
                             st.download_button(
                                 "Download", data=f.read(), file_name=entry['filename'],
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"dl_{entry['filename']}", use_container_width=True,
+                                # Index-based key guarantees uniqueness even if
+                                # two archived entries somehow share a filename
+                                # (e.g. leftover data from before this fix).
+                                key=f"dl_{i}_{entry['filename']}", use_container_width=True,
                             )
                     else:
                         st.caption("File no longer available")

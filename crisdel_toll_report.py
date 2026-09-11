@@ -663,7 +663,15 @@ def save_report_to_archive(workbook_bytes, df, fraud_threshold=FRAUD_THRESHOLD):
         date_fragment = f"{start_date.strftime('%Y-%m-%d')}_to_{end_date.strftime('%Y-%m-%d')}"
     else:
         date_fragment = ts.strftime('%Y-%m-%d_%H%M%S')
-    fname = f"Crisdel Toll Report {date_fragment}.xlsx"
+
+    base_name = f"Crisdel Toll Report {date_fragment}"
+    fname = f"{base_name}.xlsx"
+    existing_filenames = {e['filename'] for e in _load_archive_index()}
+    suffix = 1
+    while fname in existing_filenames or os.path.exists(os.path.join(ARCHIVE_DIR, fname)):
+        fname = f"{base_name} ({suffix}).xlsx"
+        suffix += 1
+
     fpath = os.path.join(ARCHIVE_DIR, fname)
     with open(fpath, 'wb') as f:
         f.write(workbook_bytes)
